@@ -2,9 +2,9 @@ import os
 import logging
 from pymupdf import pymupdf
 from PyQt6.QtWidgets import (QMainWindow, QTabWidget, QFileDialog, QMessageBox, QInputDialog, QLineEdit,
-                             QDialog, QLabel, QVBoxLayout, QWidget, QPushButton)
-from PyQt6.QtGui import (QAction)
-from PyQt6.QtCore import Qt
+                             QDialog, QLabel, QVBoxLayout, QWidget, QPushButton, QColorDialog, QToolBar)
+from PyQt6.QtCore import Qt, QPointF
+from PyQt6.QtGui import QAction, QIcon
 
 from dialogs import (RearrangePagesDialog, EncryptionOptionsDialog, MergePDFsDialog, SplitPDFDialog)
 from widgets import create_pdf_viewer_widget
@@ -34,6 +34,7 @@ class PDFEditor(QMainWindow):
         # Create actions for the menu bar and toolbar
         self.create_actions()
         self.create_menu_bar()
+        self.create_annotation_toolbar()
 
     def create_central_widget(self):
         central_widget = QWidget()
@@ -374,3 +375,43 @@ class PDFEditor(QMainWindow):
                     self.tabs.addTab(pdfWidget, fileName.split('/')[-1])
                     self.tabs.setCurrentWidget(pdfWidget)
 
+    def create_annotation_toolbar(self):
+            annotation_toolbar = QToolBar("Annotation Tools")
+            self.addToolBar(annotation_toolbar)
+
+            # Add highlight action
+            highlight_action = QAction(QIcon("path_to_highlight_icon.png"), "Highlight", self)
+            highlight_action.triggered.connect(self.highlight_text)
+            annotation_toolbar.addAction(highlight_action)
+
+            # Add comment action
+            comment_action = QAction(QIcon("path_to_comment_icon.png"), "Add Comment", self)
+            comment_action.triggered.connect(self.add_comment)
+            annotation_toolbar.addAction(comment_action)
+
+            # Add text note action
+            text_note_action = QAction(QIcon("path_to_text_note_icon.png"), "Add Text Note", self)
+            text_note_action.triggered.connect(self.add_text_note)
+            annotation_toolbar.addAction(text_note_action)
+
+    def highlight_text(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            color = QColorDialog.getColor()
+            if color.isValid():
+                current_widget.set_annotation_mode("highlight", color.name())
+
+    def add_comment(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            current_widget.set_annotation_mode("comment")
+
+    def add_text_note(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            current_widget.set_annotation_mode("text_note")
+
+    def save_annotations(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            current_widget.save_annotations()

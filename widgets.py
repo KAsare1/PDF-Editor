@@ -1,10 +1,24 @@
 import fitz  # PyMuPDF
 import logging
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QScrollArea, QVBoxLayout, QLabel, QSplitter, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QSlider, QLineEdit, QMessageBox)
-from PyQt6.QtCore import Qt, QMimeData
+                             QTableWidgetItem, QHeaderView, QSlider, QLineEdit, QMessageBox, QInputDialog)
+from PyQt6.QtCore import Qt, QMimeData, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QDrag
 
+
+
+class PDFPageLabel(QLabel):
+    pdf_click = pyqtSignal(object)  # Custom signal to handle click events
+
+    def __init__(self, page, scale_factor, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.page = page
+        self.scale_factor = scale_factor
+
+    def mousePressEvent(self, event):
+        # Emit a custom signal when the user clicks on the label
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.pdf_click.emit(event)
 
 def create_pdf_viewer_widget(pdf_path, pdf_document):
     try:
@@ -12,6 +26,11 @@ def create_pdf_viewer_widget(pdf_path, pdf_document):
         layout = QHBoxLayout()
         widget.setLayout(layout)
         widget.pdf_path = pdf_path  # Store the pdf_path in the widget
+        widget.pdf_document = pdf_document  # Store the PDF document in the widget
+        widget.annotation_mode = None  # Default to no annotation mode
+        widget.annotation_color = None
+        widget.scale_factor = 1  # To manage the zoom scale
+        widget.current_page = 0  # To track the currently loaded page
 
         # Splitter to divide the PDF view and the controls
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -26,14 +45,19 @@ def create_pdf_viewer_widget(pdf_path, pdf_document):
         pdf_pages = [pdf_document.load_page(i) for i in range(len(pdf_document))]
 
         pdf_labels = []
-        for page in pdf_pages:
+        for page_index, page in enumerate(pdf_pages):
             pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))  # Scale down the content
             qimage = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)
             pixmap = QPixmap.fromImage(qimage)
-            label = QLabel()
+
+            # Use the custom PDFPageLabel to handle clicks
+            label = PDFPageLabel(page, widget.scale_factor)
             label.setPixmap(pixmap)
             pdf_labels.append(label)
             scroll_layout.addWidget(label)
+
+            # Connect the custom click event to the handler
+            label.pdf_click.connect(lambda event, page=page_index: widget.on_pdf_click(event, page))
 
             hbox = QHBoxLayout()
             hbox.addStretch(1)
@@ -89,6 +113,121 @@ def create_pdf_viewer_widget(pdf_path, pdf_document):
         splitter.setSizes([800, 400])
 
         layout.addWidget(splitter)
+
+
+                # Annotation mode setter
+        def set_annotation_mode(mode, color=None):
+            widget.annotation_mode = mode
+            if color:
+                widget.annotation_color = color
+
+        widget.set_annotation_mode = set_annotation_mode
+
+        def hex_to_rgb(hex_color):
+            # Remove the hash symbol if present
+            hex_color = hex_color.lstrip('#')
+            
+            # Convert the hex code to RGB values
+            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        
+        def update_pdf_pixmap(page, page_index):
+            # Update the QPixmap of the PDFPageLabel
+            pix = page.get_pixmap(matrix=fitz.Matrix(widget.scale_factor, widget.scale_factor))
+            qimage = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimage)
+            pdf_labels[page_index].setPixmap(pixmap)
+
+        def display_annotations(page):
+            annotations = []
+            for a in page.annots:
+                if a.type == fitz.ANNOT_TEXT:
+                    annotations.append(a.text)
+
+            # Here you can display annotations in a message box or in a dedicated UI element
+            if annotations:
+                QMessageBox.information(widget, "Annotations", "\n".join(annotations), QMessageBox.Ok)
+
+        def on_pdf_click(event, page_index):
+            if widget.annotation_mode:
+                try:
+                    # Load the clicked page using the page index
+                    page = widget.pdf_document.load_page(page_index)
+                    
+                    # Get the click position, scale it accordingly
+                    point = event.position()
+                    x_scaled = point.x() / widget.scale_factor
+                    y_scaled = point.y() / widget.scale_factor
+                    fitz_point = fitz.Point(x_scaled, y_scaled)
+
+                    # Handle different annotation modes
+                    if widget.annotation_mode == "highlight":
+                        # Define a rectangle around the clicked area for highlight
+                        rect = fitz.Rect(x_scaled - 20, y_scaled - 5, x_scaled + 20, y_scaled + 5)
+                        highlight = page.add_highlight_annot(rect)
+                        
+                        # Convert annotation color to RGB (if it's in hex format)
+                        color = widget.annotation_color
+                        if isinstance(color, str):
+                            color = hex_to_rgb(color)
+                        
+                        # Normalize the RGB color to the range 0-1
+                        normalized_color = [c / 255.0 for c in color]
+                        
+                        # Set the color for the highlight
+                        highlight.set_colors(stroke=normalized_color)
+                        highlight.update()
+
+                        # Update the QPixmap of the PDFPageLabel
+                        pix = page.get_pixmap(matrix=fitz.Matrix(widget.scale_factor, widget.scale_factor))
+                        qimage = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)
+                        pixmap = QPixmap.fromImage(qimage)
+                        pdf_labels[page_index].setPixmap(pixmap)
+
+                    elif widget.annotation_mode == "comment":
+                        comment_text, ok = QInputDialog.getText(widget, "Add Comment", "Enter comment:")
+                        if ok and comment_text:
+                            annot = page.add_text_annot(fitz_point, comment_text)
+                            annot.update()
+                            # Update the QPixmap of the PDFPageLabel
+                            update_pdf_pixmap(page, page_index)
+
+                            # Display all comments
+                            display_annotations(page)
+
+                    elif widget.annotation_mode == "text_note":
+                        note_text, ok = QInputDialog.getText(widget, "Add Text Note", "Enter note:")
+                        if ok and note_text:
+                            annot = page.add_text_annot(fitz_point, note_text)
+                            annot.update()
+                            # Update the QPixmap of the PDFPageLabel
+                            update_pdf_pixmap(page, page_index)
+
+                            # Display all text notes
+                            display_annotations(page)
+
+                except Exception as e:
+                    logging.error(f"Failed to annotate PDF: {e}")
+                    QMessageBox.critical(widget, "Error", f"Failed to annotate PDF: {e}")
+
+                            # Update the widget or repaint the PDF to reflect the changes
+                        
+                widget.update()  # Assuming this repaints the PDF view with annotations
+
+        # Assign the function to the widget's on_pdf_click event
+        widget.on_pdf_click = on_pdf_click
+
+
+
+        def save_annotations():
+            try:
+                widget.pdf_document.save(widget.pdf_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+                QMessageBox.information(widget, "Success", "Annotations saved successfully.")
+            except Exception as e:
+                logging.error(f"Failed to save annotations: {e}")
+                QMessageBox.critical(widget, "Error", f"Failed to save annotations: {e}")
+
+        widget.save_annotations = save_annotations
+        
 
         def zoom_pdf():
             try:
